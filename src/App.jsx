@@ -1,21 +1,22 @@
-/* Apartment Care · every screen, form and the app shell. Data and helpers live in ./lib.js */
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+/* Maintaino · every screen, form and the app shell. Data and helpers live in ./lib.js */
+import { useState, useMemo, useRef, useEffect, useCallback, Component } from "react";
 import {
  Home, Bell, Wallet, MessageSquare, MoreHorizontal, Plus, Pin, Archive,
  Phone, ChevronRight, ChevronLeft, Check, X, Upload, FileText, FileSpreadsheet,
  FileJson, Download, Users, RefreshCw, History, ThumbsUp, ThumbsDown, ShieldCheck,
- Building2, Lock, Calendar, Search, ClipboardList, Receipt, IndianRupee, CheckCircle2,
- Clock, AlertTriangle, Database, Pencil, Eye, Paperclip, Camera, ArrowRightLeft,
- Printer, Info, User,
+ Building2, Lock, Calendar, Search, Receipt, IndianRupee, CheckCircle2, Clock,
+ AlertTriangle, Database, Pencil, Eye, Paperclip, Camera, ArrowRightLeft, Printer,
+ Info, User,
 } from "lucide-react";
 import {
  AUDIT_TYPES, COMPLAINT_CATS, COMPLAINT_STATUS, Ctx, EXPENSE_CATS, MONTH_NAMES, NOTICE_TYPES, PAY_TONE,
- TODAY_ISO, TONE, VENDOR_CATS, VENDOR_ICON, activeHouses, adminFor, arrearsOf, buildReport,
- configured, confirmedPays, createApartment, cx, daysLeft, download, dueOf, errMsg,
- exportBackup, fileLabel, fmt, fmtY, houseName, initials, inr, isReviewedBy,
- loadAll, mLabel, makeActions, membersOf, monthStats, nextAdminOf, nextYM, openFile,
- owed, pad, paidBy, parseD, reviewsOf, sum, supabase, toCSV,
- uploadReceipt, useApp, votesOf, workStatus, ymOf,
+ TODAY_ISO, TONE, VENDOR_CATS, VENDOR_ICON, activeHouses, adminTermFor, arrearsOf, buildReport,
+ configured, confirmedPays, createApartment, currentTerm, cx, daysLeft, download, dueOf,
+ errMsg, exportBackup, fileLabel, fmt, fmtY, houseName, initials, inr,
+ isReviewedBy, loadAll, mLabel, makeActions, membersOf, monthStats, nextTermOf, openFile,
+ owed, paidBy, parseD, periodKeyOf, periodLabel, periodOptions, reportCSV, reviewsOf,
+ sum, supabase, termEnd, termsOf, uploadReceipt, useApp, votesOf, workStatus,
+ ymAdd, ymIdx, ymOf,
 } from "./lib";
 
 /* ==================================================================
@@ -58,7 +59,7 @@ const IconCircle = ({ icon: Icon, tone = "blue", size = "h-12 w-12" }) => (
 
 function Header({ title, subtitle, onBack, right }) {
  return (
-   <div className="sticky top-0 z-20 bg-slate-50 px-4 pt-4 pb-3 flex items-center gap-3">
+   <div className="bg-slate-50 px-4 pt-4 pb-3 flex items-center gap-3">
      {onBack && <button onClick={onBack} aria-label="Go back" className="h-12 w-12 rounded-full bg-white border border-slate-200 flex items-center justify-center shrink-0"><ChevronLeft size={26} /></button>}
      <div className="flex-1 min-w-0">
        <h1 className="text-2xl font-bold text-slate-800 truncate">{title}</h1>
@@ -69,17 +70,17 @@ function Header({ title, subtitle, onBack, right }) {
  );
 }
 
-const Page = ({ children }) => <div className="px-4 pb-36 space-y-4">{children}</div>;
+const Page = ({ children }) => <div className="px-4 pb-32 space-y-4">{children}</div>;
 
 function Sheet({ title, onClose, children }) {
  return (
-   <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(15,23,42,0.55)" }} onClick={onClose}>
-     <div className="bg-white w-full max-w-xl rounded-t-3xl flex flex-col" style={{ maxHeight: "92vh" }} onClick={(e) => e.stopPropagation()}>
+   <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-6" style={{ background: "rgba(15,23,42,0.55)" }} onClick={onClose}>
+     <div className="bg-white w-full max-w-xl md:max-w-lg rounded-t-3xl md:rounded-3xl flex flex-col" style={{ maxHeight: "92vh" }} onClick={(e) => e.stopPropagation()}>
        <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-slate-100">
          <h2 className="text-xl font-bold text-slate-800">{title}</h2>
          <button onClick={onClose} aria-label="Close" className="h-11 w-11 rounded-full bg-slate-100 flex items-center justify-center"><X size={22} /></button>
        </div>
-       <div className="overflow-y-auto px-5 pt-4 space-y-4" style={{ paddingBottom: "max(2rem, env(safe-area-inset-bottom))" }}>{children}</div>
+       <div className="overflow-y-auto px-5 pt-4 space-y-4" style={{ paddingBottom: "max(5rem, env(safe-area-inset-bottom))" }}>{children}</div>
      </div>
    </div>
  );
@@ -108,7 +109,7 @@ function FileInput({ label = "Upload file", value, onChange, accept = "image/*,.
    e.target.value = "";
    if (!f) return;
    setBusy(true); setErr("");
-   try { onChange(await uploadReceipt(f)); } // stored privately in Supabase; we keep the path
+   try { onChange(await uploadReceipt(f)); } // stored privately on the server; we keep the path
    catch (x) { setErr(errMsg(x)); }
    finally { setBusy(false); }
  };
@@ -197,6 +198,9 @@ function MonthPicker({ months, value, onChange }) {
 function Dashboard() {
  const { data, stats, cur, viewer, isAdmin, myHouseId, go, tab, openSheet } = useApp();
  const adminHouse = data.houses.find((h) => h.id === data.adminHouseId);
+ const term = currentTerm(data);
+ const nextTerm = nextTermOf(data);
+ const needsPlan = isAdmin && !nextTerm && (!term || ymIdx(termEnd(term)) <= ymIdx(cur));
  const adminOwner = membersOf(data, data.adminHouseId).find((m) => m.role === "Owner") || membersOf(data, data.adminHouseId)[0];
  const openC = data.complaints.filter((c) => ["Open", "In Progress"].includes(c.status) && c.state !== "Archived").length;
  const arrearsTotal = sum(activeHouses(data), (h) => arrearsOf(data, h.id, cur));
@@ -216,15 +220,10 @@ function Dashboard() {
 
  return (
    <div>
-     <div className="px-4 pt-5 pb-3 flex items-center gap-3">
-       <div className="flex-1 min-w-0">
-         <p className="text-base text-slate-500">Namaste, {viewer.name.split(" ")[0]}</p>
-         <h1 className="text-2xl font-bold text-slate-800 truncate">{data.settings.apartmentName}</h1>
-       </div>
-       <button onClick={() => openSheet("account")} className="flex items-center gap-2 h-12 pl-1.5 pr-4 rounded-full bg-white border border-slate-200">
-         <span className="h-9 w-9 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center">{initials(viewer.name)}</span>
-         <span className="text-base font-semibold text-slate-800">{houseName(data, myHouseId)}</span>
-       </button>
+     <div className="px-4 pt-5 pb-3">
+       <p className="text-base text-slate-500">Namaste, {viewer.name.split(" ")[0]}</p>
+       <h1 className="text-2xl font-bold text-slate-800 truncate">{data.settings.apartmentName}</h1>
+       <p className="text-base text-slate-500">{houseName(data, myHouseId)}</p>
      </div>
      <Page>
        {/* Admin card */}
@@ -239,8 +238,9 @@ function Dashboard() {
          </div>
          <div className="flex items-center justify-between mt-4 pt-4 border-t border-blue-400 gap-3">
            <div className="text-base text-blue-50">
-             <p>{cur === ymOf(TODAY_ISO) ? `${daysLeft(cur)} days left this month` : cur < ymOf(TODAY_ISO) ? "Month end has passed. Admin transfer is due" : "New month just started"}</p>
-             <p className="font-semibold text-white">Next Admin: {houseName(data, nextAdminOf(data))}</p>
+             <p>{cur === ymOf(TODAY_ISO) ? `${daysLeft(cur)} days left this month` : cur < ymOf(TODAY_ISO) ? "Month end has passed. Please close the month" : "New month just started"}</p>
+             {term && <p>Term ends {mLabel(termEnd(term))}</p>}
+             <p className="font-semibold text-white">{nextTerm ? `Next Admin: ${houseName(data, nextTerm.houseId)} from ${mLabel(nextTerm.start)}` : "Next Admin: not planned yet"}</p>
            </div>
            {isAdmin ? <Btn size="md" variant="onBlue" onClick={() => go("rotation")}>Manage</Btn>
              : adminOwner && <a href={`tel:${adminOwner.mobile}`} className="h-12 px-4 rounded-2xl bg-white text-blue-700 font-semibold inline-flex items-center gap-2"><Phone size={18} />Call Admin</a>}
@@ -248,6 +248,13 @@ function Dashboard() {
        </div>
 
        {isAdmin && <div className="flex items-center gap-2 text-base text-blue-700 bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3"><ShieldCheck size={20} className="shrink-0" />You are the Admin this month. You can add expenses, notices and manage complaints.</div>}
+
+       {needsPlan && (
+         <div className="flex items-center gap-3 text-base text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
+           <AlertTriangle size={20} className="shrink-0" /><span className="flex-1">{term ? "Your term ends this month and no next Admin is planned." : "No Admin term is set."}</span>
+           <Btn size="sm" onClick={() => go("rotation")}>Plan</Btn>
+         </div>
+       )}
 
        {/* Balance */}
        <Card>
@@ -257,7 +264,7 @@ function Dashboard() {
          <Btn variant="secondary" size="md" full className="mt-4" onClick={() => tab("finance", { seg: "summary" })}>See every transaction</Btn>
        </Card>
 
-       <div className="grid grid-cols-2 gap-3">
+       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
          <Card onClick={() => tab("finance", { seg: "collection" })}>
            <IconCircle icon={ArrowRightLeft} tone="green" size="h-10 w-10" />
            <p className="text-sm text-slate-500 mt-3">Maintenance collected</p>
@@ -304,7 +311,7 @@ function Dashboard() {
 
        {/* Quick actions */}
        <SectionTitle>Quick actions</SectionTitle>
-       <div className="grid grid-cols-2 gap-3">
+       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
          {[
            isAdmin ? { l: "Add Expense", i: Receipt, a: () => openSheet("expense") } : { l: "Pay Maintenance", i: IndianRupee, a: () => openSheet("pay", { houseId: myHouseId }) },
            isAdmin ? { l: "Add Notice", i: Bell, a: () => openSheet("notice") } : { l: "Work Approvals", i: ThumbsUp, a: () => go("work") },
@@ -696,10 +703,10 @@ function More() {
  const items = [
    { k: "work", l: "Work approvals", d: "Vote on major work", i: ThumbsUp, badge: needVote || null },
    { k: "houses", l: "Houses & members", d: "Families and phone numbers", i: Users },
-   { k: "rotation", l: "Admin rotation", d: "Who is Admin and when", i: RefreshCw },
+   { k: "rotation", l: "Admin schedule", d: "Who is Admin and for how long", i: RefreshCw },
    { k: "vendors", l: "Vendor directory", d: "Plumber, electrician, hospital", i: Phone },
    { k: "audit", l: "Audit log", d: "Every action, kept forever", i: History },
-   { k: "reports", l: "Reports", d: "PDF and Excel downloads", i: FileText },
+   { k: "reports", l: "Report", d: "Month, quarter or year", i: FileText },
    { k: "backup", l: "Backup & restore", d: "Keep a copy of all data", i: Database },
  ];
  return (
@@ -912,39 +919,71 @@ function Houses() {
   SCREENS/ROTATION
   ================================================================== */
 function Rotation() {
- const { data, back, isAdmin, openSheet, cur, stats } = useApp();
- const next = nextAdminOf(data);
- const year = cur.slice(0, 4);
- const schedule = Array.from({ length: 12 }, (_, i) => { const ym = `${year}-${pad(i + 1)}`; return { ym, house: adminFor(data, ym) }; });
+ const { data, back, isAdmin, openSheet, cur, A, toast } = useApp();
+ const term = currentTerm(data);
+ const nextTerm = nextTermOf(data);
+ const adminHouse = data.houses.find((h) => h.id === data.adminHouseId);
+ const terms = termsOf(data).slice().sort((a, b) => ymIdx(b.start) - ymIdx(a.start));
+ const needsPlan = !nextTerm && (!term || ymIdx(termEnd(term)) <= ymIdx(cur));
+ const statusOf = (t) => (ymIdx(t.start) > ymIdx(cur) ? "Planned" : ymIdx(termEnd(t)) < ymIdx(cur) ? "Done" : "Now");
+ const plural = (n) => `${n} ${n === 1 ? "month" : "months"}`;
  return (
    <div>
-     <Header title="Admin rotation" subtitle="A new Admin every month" onBack={back} />
+     <Header title="Admin schedule" subtitle="Choose who is Admin and for how long" onBack={back} />
      <Page>
        <div className="grid grid-cols-2 gap-3">
-         <div className="rounded-2xl bg-blue-600 text-white p-4"><p className="text-blue-100 text-base">Current Admin</p><p className="text-3xl font-bold mt-1">{houseName(data, data.adminHouseId)}</p><p className="text-blue-100 text-base mt-1">{mLabel(cur)}</p></div>
-         <Card><p className="text-slate-500 text-base">Next Admin</p><p className="text-3xl font-bold text-slate-800 mt-1">{houseName(data, next)}</p><p className="text-slate-500 text-base mt-1">{mLabel(nextYM(cur))}</p></Card>
+         <div className="rounded-2xl bg-blue-600 text-white p-4">
+           <p className="text-blue-100 text-base">Current Admin</p>
+           <p className="text-3xl font-bold mt-1">{adminHouse ? adminHouse.name : "—"}</p>
+           <p className="text-blue-100 text-base mt-1">{term ? `Until ${mLabel(termEnd(term))}` : "No end date set"}</p>
+         </div>
+         <Card>
+           <p className="text-slate-500 text-base">Next Admin</p>
+           <p className="text-3xl font-bold text-slate-800 mt-1">{nextTerm ? houseName(data, nextTerm.houseId) : "Not planned"}</p>
+           <p className="text-slate-500 text-base mt-1">{nextTerm ? `From ${mLabel(nextTerm.start)} · ${plural(nextTerm.months)}` : "Plan one below"}</p>
+         </Card>
        </div>
-       {isAdmin ? <Btn full icon={ArrowRightLeft} onClick={() => openSheet("transfer")}>Transfer Admin</Btn>
-         : <div className="flex items-center gap-2 text-base text-slate-600 bg-slate-100 rounded-2xl px-4 py-3"><Lock size={18} className="shrink-0" />Only the current Admin can close the month and transfer the role.</div>}
-       <p className="text-base text-slate-500 px-1">The role moves to the next house automatically at the end of each month. Every transfer is saved permanently.</p>
+       {needsPlan && (
+         <div className="flex gap-2 text-base text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl p-3">
+           <AlertTriangle size={20} className="shrink-0" />
+           <span>{term ? "The current term ends this month and no one is planned next." : "No Admin term is set."} The current Admin stays on until a new term is planned.</span>
+         </div>
+       )}
+       {isAdmin ? (
+         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+           <Btn icon={Plus} onClick={() => openSheet("term")}>Plan next Admin</Btn>
+           <Btn variant="secondary" icon={ArrowRightLeft} onClick={() => openSheet("closeMonth")}>Close {MONTH_NAMES[+cur.slice(5) - 1]}</Btn>
+         </div>
+       ) : (
+         <div className="flex items-center gap-2 text-base text-slate-600 bg-slate-100 rounded-2xl px-4 py-3"><Lock size={18} className="shrink-0" />Only the current Admin can change the schedule or close the month.</div>
+       )}
+       <p className="text-base text-slate-500 px-1">Any house can be Admin for any number of months. Each month is closed with notes, and the balance carries forward.</p>
 
-       <SectionTitle>Schedule for {year}</SectionTitle>
-       <Card className="divide-y divide-slate-100 py-1">
-         {schedule.map((s) => {
-           const isCur = s.ym === cur, past = s.ym < cur;
-           return (
-             <div key={s.ym} className={cx("flex items-center justify-between py-3", isCur && "bg-blue-50 -mx-4 px-4")}>
-               <span className={cx("text-lg", isCur ? "font-bold text-blue-700" : past ? "text-slate-400" : "text-slate-800")}>{MONTH_NAMES[+s.ym.slice(5) - 1]}</span>
-               <span className="flex items-center gap-2"><span className={cx("text-lg font-semibold", past ? "text-slate-400" : "text-slate-800")}>{s.ym < data.rotation.startMonth ? "—" : houseName(data, s.house)}</span>{isCur ? <Badge tone="blue">Now</Badge> : past ? <Check size={18} className="text-green-600" /> : null}</span>
+       <SectionTitle>Admin terms</SectionTitle>
+       {terms.length === 0 && <Card><p className="text-base text-slate-500">No terms yet.</p></Card>}
+       {terms.map((t) => {
+         const st = statusOf(t);
+         return (
+           <Card key={t.id} className="flex items-center gap-3">
+             <IconCircle icon={ShieldCheck} tone={st === "Now" ? "blue" : "slate"} />
+             <div className="flex-1 min-w-0">
+               <p className="text-lg font-bold text-slate-800">{houseName(data, t.houseId)}</p>
+               <p className="text-base text-slate-500">{t.months === 1 ? mLabel(t.start) : `${mLabel(t.start)} – ${mLabel(termEnd(t))}`} · {plural(t.months)}</p>
              </div>
-           );
-         })}
-       </Card>
+             <Badge tone={st === "Now" ? "blue" : st === "Planned" ? "amber" : "slate"}>{st}</Badge>
+             {isAdmin && st === "Planned" && <button onClick={() => { A.archiveTerm(t.id); toast("Planned term removed"); }} aria-label="Remove planned term" className="h-11 w-11 rounded-full bg-slate-100 flex items-center justify-center shrink-0"><Archive size={18} /></button>}
+           </Card>
+         );
+       })}
 
-       <SectionTitle>Transfer history</SectionTitle>
+       <SectionTitle>Month closing history</SectionTitle>
+       {data.transfers.length === 0 && <Card><p className="text-base text-slate-500">No month has been closed yet.</p></Card>}
        {[...data.transfers].reverse().map((t) => (
          <Card key={t.id}>
-           <div className="flex items-center justify-between"><p className="text-lg font-bold text-slate-800">{houseName(data, t.from)} → {houseName(data, t.to)}</p><Badge tone="slate">{mLabel(t.month)}</Badge></div>
+           <div className="flex items-center justify-between gap-2">
+             <p className="text-lg font-bold text-slate-800">{mLabel(t.month)} closed</p>
+             <Badge tone={t.from === t.to ? "slate" : "blue"}>{t.from === t.to ? `${houseName(data, t.to)} continued` : `${houseName(data, t.from)} → ${houseName(data, t.to)}`}</Badge>
+           </div>
            <p className="text-base text-slate-500">{fmtY(t.date)} · Closing balance <span className="font-semibold text-slate-700">{inr(t.closingBalance)}</span></p>
            <div className="mt-2 p-3 rounded-xl bg-slate-50"><p className="text-sm font-semibold text-slate-500">Monthly closing notes</p><p className="text-base text-slate-700 mt-0.5">{t.notes}</p></div>
          </Card>
@@ -953,7 +992,6 @@ function Rotation() {
    </div>
  );
 }
-
 /* ==================================================================
   SCREENS/VENDORS
   ================================================================== */
@@ -1029,65 +1067,63 @@ function Audit() {
 /* ==================================================================
   SCREENS/REPORTS
   ================================================================== */
-function Reports() {
- const { data, back, cur, isAdmin, openSheet, toast } = useApp();
- const months = Object.keys(data.months).sort();
- const [ym, setYm] = useState(cur);
- const kinds = [
-   { k: "monthly", l: "Monthly report", d: "Everything for the month", i: ClipboardList },
-   { k: "financial", l: "Financial report", d: "Balances and spending", i: Wallet },
-   { k: "expense", l: "Expense report", d: "All bills and vendors", i: Receipt },
-   { k: "maintenance", l: "Maintenance report", d: "Who has paid, who is pending", i: IndianRupee },
-   { k: "complaint", l: "Complaint report", d: "All complaints and status", i: MessageSquare },
- ];
- const excel = (k) => { const r = buildReport(k, data, ym); download(`${k}_report_${ym}.csv`, toCSV(r.columns, r.rows), "text/csv;charset=utf-8"); toast("Excel file downloaded"); };
+const REPORT_TYPES = [{ id: "month", label: "Month" }, { id: "quarter", label: "Quarter" }, { id: "year", label: "Year" }];
+
+function ReportTable({ columns, rows }) {
  return (
-   <div>
-     <Header title="Reports" subtitle="View, print or download" onBack={back} />
-     <Page>
-       <MonthPicker months={months} value={ym} onChange={setYm} />
-       {!isAdmin && <div className="flex items-center gap-2 text-base text-slate-600 bg-slate-100 rounded-2xl px-4 py-3"><Lock size={18} className="shrink-0" />Everyone can view reports. Only the Admin can download them.</div>}
-       {kinds.map((r) => (
-         <Card key={r.k}>
-           <div className="flex items-center gap-3"><IconCircle icon={r.i} tone="blue" /><div><p className="text-lg font-bold text-slate-800">{r.l}</p><p className="text-base text-slate-500">{r.d}</p></div></div>
-           <div className="flex gap-2 mt-3">
-             <Btn size="md" variant="ghost" icon={Eye} className="flex-1" onClick={() => openSheet("report", { kind: r.k, ym })}>View</Btn>
-             {isAdmin && <Btn size="md" variant="secondary" icon={FileText} className="flex-1" onClick={() => openSheet("report", { kind: r.k, ym, print: true })}>PDF</Btn>}
-             {isAdmin && <Btn size="md" variant="secondary" icon={FileSpreadsheet} className="flex-1" onClick={() => excel(r.k)}>Excel</Btn>}
-           </div>
-         </Card>
-       ))}
-       <Card className="flex items-center gap-3"><IconCircle icon={FileJson} tone="slate" /><div className="flex-1"><p className="text-lg font-bold text-slate-800">JSON backup</p><p className="text-base text-slate-500">Complete copy of all data</p></div></Card>
-     </Page>
+   <div className="overflow-x-auto">
+     <table className="w-full text-base">
+       <thead><tr className="border-b-2 border-slate-200">{columns.map((c) => <th key={c} className="text-left py-2 pr-3 text-sm text-slate-500 font-semibold whitespace-nowrap">{c}</th>)}</tr></thead>
+       <tbody>
+         {rows.length === 0 && <tr><td colSpan={columns.length} className="py-3 text-slate-500">No records.</td></tr>}
+         {rows.map((row, i) => <tr key={i} className="border-b border-slate-100">{row.map((c, j) => <td key={j} className="py-2 pr-3 text-slate-800 align-top">{typeof c === "number" ? c.toLocaleString("en-IN") : c}</td>)}</tr>)}
+       </tbody>
+     </table>
    </div>
  );
 }
 
-function ReportSheet({ kind, ym, print }) {
- const { data, closeSheet, isAdmin, toast } = useApp();
- const r = buildReport(kind, data, ym);
- const doPrint = () => { try { window.print(); } catch (e) { toast("Printing is not available here"); } };
+function Reports() {
+ const { data, back, cur, isAdmin, toast } = useApp();
+ const [type, setType] = useState("month");
+ const [key, setKey] = useState(periodKeyOf("month", cur));
+ const options = periodOptions(data, type);
+ const r = useMemo(() => buildReport(data, type, key), [data, type, key]);
+ const changeType = (t) => { setType(t); setKey(periodKeyOf(t, cur)); };
+ const excel = () => { download(`maintaino_report_${key}.csv`, reportCSV(r), "text/csv;charset=utf-8"); toast("Excel file downloaded"); };
+ const doPrint = () => { try { window.print(); } catch (e) { toast("Printing is not available on this device", "error"); } };
  return (
-   <Sheet title={r.title} onClose={closeSheet}>
-     <div id="print-area" className="bg-white">
-       <h2 className="text-2xl font-bold text-slate-800">{r.title}</h2>
-       <div className="mt-3 space-y-1">{r.summary.map(([k, v]) => <div key={k} className="flex justify-between text-base"><span className="text-slate-500">{k}</span><span className="font-semibold text-slate-800">{v}</span></div>)}</div>
-       <div className="mt-4 overflow-x-auto">
-         <table className="w-full text-base">
-           <thead><tr className="border-b-2 border-slate-200">{r.columns.map((c) => <th key={c} className="text-left py-2 pr-3 text-sm text-slate-500 font-semibold whitespace-nowrap">{c}</th>)}</tr></thead>
-           <tbody>
-             {r.rows.length === 0 && <tr><td colSpan={r.columns.length} className="py-4 text-slate-500">No records for this month.</td></tr>}
-             {r.rows.map((row, i) => <tr key={i} className="border-b border-slate-100">{row.map((c, j) => <td key={j} className="py-2 pr-3 text-slate-800 align-top">{typeof c === "number" ? c.toLocaleString("en-IN") : c}</td>)}</tr>)}
-           </tbody>
-         </table>
+   <div>
+     <Header title="Report" subtitle="Choose a month, quarter or year" onBack={back} />
+     <Page>
+       <Segments value={type} onChange={changeType} options={REPORT_TYPES} />
+       <Select value={key} onChange={(e) => setKey(e.target.value)} options={options.map((k) => ({ value: k, label: periodLabel(type, k) }))} aria-label="Report period" />
+       {isAdmin ? (
+         <div className="grid grid-cols-2 gap-3">
+           <Btn variant="secondary" icon={Printer} onClick={doPrint}>Print / PDF</Btn>
+           <Btn variant="secondary" icon={FileSpreadsheet} onClick={excel}>Excel</Btn>
+         </div>
+       ) : (
+         <div className="flex items-center gap-2 text-base text-slate-600 bg-slate-100 rounded-2xl px-4 py-3"><Lock size={18} className="shrink-0" />Everyone can view the report. Only the Admin can download it.</div>
+       )}
+       <div id="print-area" className="space-y-4">
+         <Card>
+           <h2 className="text-2xl font-bold text-slate-800">{r.title}</h2>
+           <p className="text-base text-slate-500 mb-3">{r.label}</p>
+           <div className="space-y-1.5">{r.summary.map(([k, v]) => <div key={k} className="flex justify-between gap-3 text-base"><span className="text-slate-500">{k}</span><span className="font-semibold text-slate-800 text-right">{v}</span></div>)}</div>
+         </Card>
+         {r.sections.map((sec) => (
+           <Card key={sec.title}>
+             <h3 className="text-lg font-bold text-slate-800 mb-2">{sec.title}</h3>
+             <ReportTable columns={sec.columns} rows={sec.rows} />
+           </Card>
+         ))}
+         <p className="text-sm text-slate-400 text-center">Generated on {fmtY(TODAY_ISO)} · Maintaino</p>
        </div>
-       <p className="text-sm text-slate-400 mt-4">Generated on {fmtY(TODAY_ISO)} · {data.settings.apartmentName}</p>
-     </div>
-     {isAdmin && <Btn full icon={Printer} onClick={doPrint}>Print or save as PDF</Btn>}
-   </Sheet>
+     </Page>
+   </div>
  );
 }
-
 /* ==================================================================
   SCREENS/BACKUP
   ================================================================== */
@@ -1123,11 +1159,11 @@ function Backup() {
    setErr("");
    try {
      const obj = JSON.parse(await f.text());
-     if (obj.app !== "apartment-care" || !obj.tables || REQUIRED.some((k) => !Array.isArray(obj.tables[k]))) throw new Error("bad");
+     if ((obj.app !== "maintaino" && obj.app !== "apartment-care") || !obj.tables || REQUIRED.some((k) => !Array.isArray(obj.tables[k]))) throw new Error("bad");
      setPending({ name: f.name, obj });
    } catch (x) {
      setPending(null);
-     setErr(`This file is not a valid Apartment Care backup. Please choose a file like ${fname}.`);
+     setErr(`This file is not a valid Maintaino backup. Please choose a file like ${fname}.`);
    }
  };
 
@@ -1141,7 +1177,7 @@ function Backup() {
          <div className="grid grid-cols-3 gap-2 mt-4">{counts.map(([k, v]) => <div key={k} className="rounded-xl bg-slate-50 p-2 text-center"><p className="text-xl font-bold text-slate-800">{v}</p><p className="text-sm text-slate-500">{k}</p></div>)}</div>
          <Btn full className="mt-4" icon={Download} disabled={!isAdmin || working} onClick={make}>{working ? "Preparing…" : "Download backup"}</Btn>
          <p className="text-sm text-slate-500 mt-2 text-center">{last ? `Last backup: ${fmtY(last.ts)} (${last.text.replace("Backup downloaded: ", "")})` : "No backup taken yet."}</p>
-         <p className="text-sm text-slate-500 mt-1 text-center">Bills and receipts are stored safely in Supabase. The backup keeps their file names and links.</p>
+         <p className="text-sm text-slate-500 mt-1 text-center">Bills and receipts are stored safely on the server. The backup keeps their file names and links.</p>
        </Card>
        <Card>
          <div className="flex items-center gap-3"><IconCircle icon={Upload} tone="green" /><div><p className="text-lg font-bold text-slate-800">Restore from backup</p><p className="text-base text-slate-500">Brings back missing and edited records</p></div></div>
@@ -1285,7 +1321,7 @@ function HouseSheet() {
    <Sheet title="Add house" onClose={closeSheet}>
      <Field label="House name"><TextInput value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
      <Field label="House number"><TextInput value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} placeholder="e.g. G-107" /></Field>
-     <p className="text-base text-slate-500">New houses join the end of the Admin rotation and pay the same monthly maintenance.</p>
+     <p className="text-base text-slate-500">New houses pay the same monthly maintenance. You can plan them as Admin under Admin schedule.</p>
      <Btn full disabled={!f.name.trim() || !f.number.trim()} onClick={() => { A.addHouse(f); toast("House added"); closeSheet(); }}>Add house</Btn>
    </Sheet>
  );
@@ -1309,26 +1345,67 @@ function MemberSheet({ initial, houseId }) {
  );
 }
 
-function TransferSheet() {
+const TERM_OPTIONS = Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: i === 0 ? "1 month" : `${i + 1} months` }));
+
+function CloseMonthSheet() {
  const { data, cur, stats, closeSheet, A, toast } = useApp();
- const [to, setTo] = useState(nextAdminOf(data)); const [notes, setNotes] = useState(""); const [ok, setOk] = useState(false);
+ const next = ymAdd(cur, 1);
+ const planned = adminTermFor(data, next);
+ const others = activeHouses(data).filter((h) => h.id !== data.adminHouseId);
+ const [notes, setNotes] = useState("");
+ const [ok, setOk] = useState(false);
+ const [handover, setHandover] = useState(false);
+ const [to, setTo] = useState(others[0] ? others[0].id : "");
+ const [months, setMonths] = useState("1");
  const openC = data.complaints.filter((c) => ["Open", "In Progress"].includes(c.status) && c.state !== "Archived").length;
  const awaiting = data.payments.filter((p) => p.status === "Awaiting" && p.state !== "Archived").length;
+ const nextAdminId = handover ? to : planned ? planned.houseId : data.adminHouseId;
+ const nextNote = handover ? `${houseName(data, to)} for ${months} ${months === "1" ? "month" : "months"}` : planned ? `${houseName(data, planned.houseId)} (planned)` : `${houseName(data, data.adminHouseId)} continues (nobody planned)`;
  return (
-   <Sheet title="Close month & transfer Admin" onClose={closeSheet}>
+   <Sheet title={`Close ${MONTH_NAMES[+cur.slice(5) - 1]}`} onClose={closeSheet}>
      <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 space-y-2">
        <div className="flex justify-between text-base"><span className="text-slate-500">Month</span><span className="font-semibold">{mLabel(cur)}</span></div>
        <div className="flex justify-between text-base"><span className="text-slate-500">Closing balance</span><span className="font-bold text-blue-700 text-xl">{inr(stats.closing)}</span></div>
        <div className="flex justify-between text-base"><span className="text-slate-500">Pending collections</span><span className="font-semibold">{inr(stats.pending)}</span></div>
        <div className="flex justify-between text-base"><span className="text-slate-500">Open complaints</span><span className="font-semibold">{openC}</span></div>
+       <div className="flex justify-between text-base gap-3"><span className="text-slate-500">Admin for {mLabel(next)}</span><span className="font-semibold text-right">{nextNote}</span></div>
      </div>
      {(awaiting > 0 || openC > 0 || stats.pending > 0) && (
-       <div className="flex gap-2 text-base text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl p-3"><AlertTriangle size={20} className="shrink-0" /><span>{awaiting > 0 && `${awaiting} payment proof is still waiting for confirmation. `}Pending dues and open complaints will carry forward to the next Admin.</span></div>
+       <div className="flex gap-2 text-base text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl p-3"><AlertTriangle size={20} className="shrink-0" /><span>{awaiting > 0 && `${awaiting} payment proof is still waiting for confirmation. `}Pending dues and open complaints carry forward to next month.</span></div>
      )}
-     <Field label="Transfer to"><Select value={to} onChange={(e) => setTo(e.target.value)} options={data.rotation.order.filter((h) => h !== data.adminHouseId).map((h) => ({ value: h, label: `${houseName(data, h)}${h === nextAdminOf(data) ? " (next in rotation)" : ""}` }))} /></Field>
+     <Checkbox checked={handover} onChange={setHandover}>Hand over to a different house now (ends the current term early)</Checkbox>
+     {handover && (
+       <div className="space-y-3 pl-1">
+         <Field label="New Admin house"><Select value={to} onChange={(e) => setTo(e.target.value)} options={others.map((h) => ({ value: h.id, label: h.name }))} /></Field>
+         <Field label="For how long"><Select value={months} onChange={(e) => setMonths(e.target.value)} options={TERM_OPTIONS} /></Field>
+       </div>
+     )}
      <Field label="Monthly closing notes" hint="Shared with all houses. Write what was done and what is pending."><TextArea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Gate lock replaced. Terrace waterproofing vote is open." /></Field>
-     <Checkbox checked={ok} onChange={setOk}>I confirm the accounts for {mLabel(cur)} are final. This will be saved permanently.</Checkbox>
-     <Btn full disabled={!ok || notes.trim().length < 10} onClick={() => { A.transferAdmin(to, notes.trim()); toast(`${houseName(data, to)} is now Admin`); closeSheet(); }}>Transfer to {houseName(data, to)}</Btn>
+     <Checkbox checked={ok} onChange={setOk}>I confirm the accounts for {mLabel(cur)} are final. This is saved permanently.</Checkbox>
+     <Btn full disabled={!ok || notes.trim().length < 10 || (handover && !to)} onClick={() => { A.closeMonth(notes.trim(), handover ? { houseId: to, months } : null); toast(`${mLabel(cur)} closed`); closeSheet(); }}>Close {MONTH_NAMES[+cur.slice(5) - 1]}</Btn>
+   </Sheet>
+ );
+}
+
+function TermSheet() {
+ const { data, cur, closeSheet, A, toast } = useApp();
+ const lastEnd = termsOf(data).reduce((m, t) => Math.max(m, ymIdx(termEnd(t))), ymIdx(cur));
+ const defaultStart = ymAdd(cur, lastEnd - ymIdx(cur) + 1);
+ const startOptions = [...new Set([defaultStart, ...Array.from({ length: 24 }, (_, i) => ymAdd(cur, i + 1))])].sort();
+ const [f, setF] = useState({ houseId: (activeHouses(data).find((h) => h.id !== data.adminHouseId) || activeHouses(data)[0] || {}).id || "", start: defaultStart, months: "1" });
+ const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+ const end = ymAdd(f.start, Number(f.months) - 1);
+ const overlap = termsOf(data).some((t) => ymIdx(t.start) <= ymIdx(end) && ymIdx(f.start) <= ymIdx(termEnd(t)));
+ return (
+   <Sheet title="Plan next Admin" onClose={closeSheet}>
+     <Field label="House"><Select value={f.houseId} onChange={set("houseId")} options={activeHouses(data).map((h) => ({ value: h.id, label: h.name }))} /></Field>
+     <Field label="Starts in"><Select value={f.start} onChange={set("start")} options={startOptions.map((m) => ({ value: m, label: mLabel(m) }))} /></Field>
+     <Field label="For how long"><Select value={f.months} onChange={set("months")} options={TERM_OPTIONS} /></Field>
+     <div className="rounded-2xl bg-blue-50 p-4 text-base text-slate-700">
+       {houseName(data, f.houseId)} will be Admin {f.months === "1" ? `in ${mLabel(f.start)}` : `from ${mLabel(f.start)} to ${mLabel(end)}`}.
+     </div>
+     {overlap && <p className="text-base text-red-600">This overlaps another Admin term. Remove that term first or choose a later month.</p>}
+     <Btn full disabled={overlap || !f.houseId} onClick={() => { A.addTerm(f); toast("Admin planned"); closeSheet(); }}>Save plan</Btn>
    </Sheet>
  );
 }
@@ -1374,7 +1451,7 @@ const Brand = ({ title, text }) => (
 function Splash({ text = "Loading…" }) {
  return (
    <Shell>
-     <Brand title="Apartment Care" />
+     <Brand title="Maintaino" />
      <p className="text-center text-lg text-slate-500">{text}</p>
    </Shell>
  );
@@ -1383,12 +1460,13 @@ function Splash({ text = "Loading…" }) {
 function SetupNeeded() {
  return (
    <Shell>
-     <Brand title="Almost ready" />
-     <Card>
-       <p className="text-lg font-bold">Supabase is not connected yet</p>
-       <p className="text-base text-slate-600 mt-2">Add these two environment variables, then rebuild:</p>
-       <pre className="mt-3 p-3 rounded-xl bg-slate-100 text-sm overflow-x-auto">VITE_SUPABASE_URL{"\n"}VITE_SUPABASE_ANON_KEY</pre>
-       <p className="text-base text-slate-500 mt-3">On Netlify: Site configuration → Environment variables. Locally: copy .env.example to .env.</p>
+     <Brand title="Maintaino" />
+     <Card className="space-y-3 text-center">
+       <div className="mx-auto h-14 w-14 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center"><AlertTriangle size={26} /></div>
+       <p className="text-xl font-bold">Server not connected</p>
+       <p className="text-base text-slate-600">We could not connect to the server. Please try again in a little while, or contact the person who set up this app.</p>
+       <Btn full onClick={() => window.location.reload()}>Try again</Btn>
+       {import.meta.env.DEV && <p className="text-sm text-slate-500 text-left">Developer note: add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file (production: your host's environment variables), then restart.</p>}
      </Card>
    </Shell>
  );
@@ -1397,7 +1475,7 @@ function SetupNeeded() {
 function LoadError({ message, onRetry, onSignOut }) {
  return (
    <Shell>
-     <Brand title="Could not load" />
+     <Brand title="Could not connect" />
      <Card>
        <p className="text-base text-slate-700">{message}</p>
        <div className="flex gap-3 mt-4">
@@ -1440,7 +1518,7 @@ function AuthScreen() {
 
  return (
    <Shell>
-     <Brand title="Apartment Care" text="Maintenance, notices and accounts for your apartment" />
+     <Brand title="Maintaino" text="Maintenance, notices and accounts for your apartment" />
      <Card className="space-y-4">
        {mode !== "forgot" && <Segments value={mode} onChange={(m) => { setMode(m); setMsg(null); }} options={[{ id: "signin", label: "Sign in" }, { id: "signup", label: "Create account" }]} />}
        {mode === "forgot" && <p className="text-lg font-bold">Reset your password</p>}
@@ -1488,7 +1566,7 @@ function Onboarding({ email, onDone, onRetry, onSignOut }) {
  const [f, setF] = useState({
    name: "", city: "", upi: "", due: "2500", opening: "0",
    houses: "House A, A-101\nHouse B, A-102\nHouse C, A-103\nHouse D, A-104\nHouse E, A-105\nHouse F, A-106",
-   myHouse: "1", myName: "", myMobile: "",
+   myHouse: "1", myMonths: "1", myName: "", myMobile: "",
  });
  const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -1503,7 +1581,7 @@ function Onboarding({ email, onDone, onRetry, onSignOut }) {
  const create = async () => {
    setBusy(true); setErr("");
    try {
-     await createApartment({ name: f.name.trim(), city: f.city.trim(), upi: f.upi.trim(), due: f.due, opening: f.opening, houses, myHouse: Number(f.myHouse), myName: f.myName.trim(), myMobile: f.myMobile.replace(/\D/g, "").slice(-10) });
+     await createApartment({ name: f.name.trim(), city: f.city.trim(), upi: f.upi.trim(), due: f.due, opening: f.opening, houses, myHouse: Number(f.myHouse), myMonths: f.myMonths, myName: f.myName.trim(), myMobile: f.myMobile.replace(/\D/g, "").slice(-10) });
      await onDone();
    } catch (e) { setErr(errMsg(e)); } finally { setBusy(false); }
  };
@@ -1542,7 +1620,7 @@ function Onboarding({ email, onDone, onRetry, onSignOut }) {
        <Field label="UPI ID for maintenance (optional)" hint="Shown to residents when they pay"><TextInput value={f.upi} onChange={set("upi")} placeholder="name@bank" /></Field>
      </Card>
      <Card className="space-y-4">
-       <Field label="Houses" hint="One per line: name, then house number. The rotation follows this order after your house.">
+       <Field label="Houses" hint="One per line: name, then house number (for example: House A, A-101).">
          <TextArea rows={7} value={f.houses} onChange={set("houses")} />
        </Field>
        <p className="text-base text-slate-500">{houses.length} {houses.length === 1 ? "house" : "houses"}</p>
@@ -1553,7 +1631,8 @@ function Onboarding({ email, onDone, onRetry, onSignOut }) {
        <Field label="Which house is yours?"><Select value={f.myHouse} onChange={set("myHouse")} options={houses.map((h, i) => ({ value: String(i + 1), label: h.name }))} /></Field>
        <Field label="Your name"><TextInput value={f.myName} onChange={set("myName")} /></Field>
        <Field label="Your mobile number (optional)"><TextInput type="tel" inputMode="tel" value={f.myMobile} onChange={set("myMobile")} /></Field>
-       <p className="text-base text-slate-500">You will be the Admin for this month. After that the role moves to the next house.</p>
+       <Field label="How long will you be the first Admin?" hint="You can plan who is Admin next, and for how long, any time."><Select value={f.myMonths} onChange={set("myMonths")} options={TERM_OPTIONS} /></Field>
+       
        {err && <div className="p-3 rounded-2xl text-base bg-red-50 border border-red-200 text-red-700">{err}</div>}
        <Btn full variant="success" disabled={!valid || busy} onClick={create}>{busy ? "Setting up…" : "Create apartment"}</Btn>
      </Card>
@@ -1565,21 +1644,45 @@ function Onboarding({ email, onDone, onRetry, onSignOut }) {
   APP
   ================================================================== */
 const SCREENS = { dashboard: Dashboard, notices: Notices, finance: Finance, complaints: Complaints, more: More, expenseDetail: ExpenseDetail, complaintDetail: ComplaintDetail, work: WorkList, workDetail: WorkDetail, houses: Houses, rotation: Rotation, vendors: Vendors, audit: Audit, reports: Reports, backup: Backup };
-const SHEETS = { expense: ExpenseSheet, notice: NoticeSheet, complaint: ComplaintSheet, status: StatusSheet, pay: PaySheet, work: WorkSheet, vendor: VendorSheet, house: HouseSheet, member: MemberSheet, transfer: TransferSheet, account: AccountSheet, report: ReportSheet };
+const SHEETS = { expense: ExpenseSheet, notice: NoticeSheet, complaint: ComplaintSheet, status: StatusSheet, pay: PaySheet, work: WorkSheet, vendor: VendorSheet, house: HouseSheet, member: MemberSheet, closeMonth: CloseMonthSheet, term: TermSheet, account: AccountSheet };
 const TABS = [
  { id: "dashboard", label: "Dashboard", icon: Home }, { id: "notices", label: "Notices", icon: Bell }, { id: "finance", label: "Finance", icon: Wallet },
  { id: "complaints", label: "Complaints", icon: MessageSquare }, { id: "more", label: "More", icon: MoreHorizontal },
 ];
 
+// Catches any unexpected crash so people never see a blank white screen.
+class ErrorBoundary extends Component {
+ constructor(props) { super(props); this.state = { failed: false }; }
+ static getDerivedStateFromError() { return { failed: true }; }
+ componentDidCatch(err) { console.error(err); }
+ render() {
+   if (!this.state.failed) return this.props.children;
+   return (
+     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-5">
+       <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 p-6 text-center space-y-4">
+         <div className="mx-auto h-16 w-16 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center"><AlertTriangle size={30} /></div>
+         <h1 className="text-2xl font-bold text-slate-800">Something went wrong</h1>
+         <p className="text-base text-slate-600">Please reload Maintaino. Your saved data is safe.</p>
+         <button onClick={() => window.location.reload()} className="h-14 w-full rounded-2xl bg-blue-600 text-white text-lg font-semibold">Reload</button>
+       </div>
+     </div>
+   );
+ }
+}
+
 export default function App() {
+ return <ErrorBoundary><Root /></ErrorBoundary>;
+}
+
+function Root() {
  const [session, setSession] = useState(undefined); // undefined = still checking
  const [recovery, setRecovery] = useState(false);
 
  useEffect(() => {
    if (!configured) return undefined;
-   supabase.auth.getSession().then(({ data }) => setSession(data.session));
-   const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
-     setSession(s);
+   supabase.auth.getSession().then(({ data }) => setSession(data.session)).catch(() => setSession(null));
+   const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
+     setSession(sess);
      if (event === "PASSWORD_RECOVERY") setRecovery(true);
    });
    return () => sub.subscription.unsubscribe();
@@ -1605,6 +1708,8 @@ function Main({ session }) {
  const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
  const keyRef = useRef(1);
  const txRef = useRef(null);
+ const savingRef = useRef(false);
+ const afterRef = useRef([]); // navigation that must wait until the saved data has reloaded
  const lastLoad = useRef(0);
  const toastTimer = useRef(null);
 
@@ -1617,12 +1722,12 @@ function Main({ session }) {
 
  const load = useCallback((claim) => {
    setPhase("loading");
-   refresh(claim).catch((e) => { setLoadErr(errMsg(e)); setPhase("error"); });
+   refresh(claim).catch((e) => { console.error(e); setLoadErr(errMsg(e)); setPhase("error"); });
  }, [refresh]);
 
  useEffect(() => { load(true); }, [load]);
 
- // Refresh when the person comes back to the app, and track connection status.
+ // Refresh when the person comes back to the app, and track the connection.
  useEffect(() => {
    const onVisible = () => { if (document.visibilityState === "visible" && Date.now() - lastLoad.current > 30000) refresh().catch(() => {}); };
    const on = () => setOnline(true), off = () => setOnline(false);
@@ -1639,41 +1744,45 @@ function Main({ session }) {
  const myHouseId = viewer ? viewer.houseId : null;
  const isAdmin = !!data && myHouseId === data.adminHouseId;
 
- /* ---- navigation, toasts ---- */
+ /* ---- navigation and messages ---- */
  const showToast = (msg, kind = "ok") => {
    setToastMsg({ msg, kind });
    clearTimeout(toastTimer.current);
    toastTimer.current = setTimeout(() => setToastMsg(null), kind === "error" ? 5000 : 2600);
  };
- // While a save is running, toast / closeSheet / back wait for it. If the save fails the sheet stays
+ // While a save is running, toast / closeSheet / back wait for it. If the save fails the form stays
  // open so the person can try again, and only an error message is shown.
  const defer = (fn) => { if (txRef.current) txRef.current.queue.push(fn); else fn(); };
  const toast = (m, kind) => (kind === "error" ? showToast(m, kind) : defer(() => showToast(m)));
  const closeSheet = () => defer(() => setSheet(null));
- const back = () => defer(() => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)));
- const go = (name, params) => setStack((s) => [...s, { name, params, key: ++keyRef.current }]);
+ const back = () => defer(() => setStack((st) => (st.length > 1 ? st.slice(0, -1) : st)));
+ const go = (name, params) => setStack((st) => [...st, { name, params, key: ++keyRef.current }]);
  const tab = (name, params) => setStack([{ name, params, key: ++keyRef.current }]);
  const openSheet = (name, props = {}) => setSheet({ name, props });
  const signOut = () => supabase.auth.signOut();
 
- /* ---- actions: save to Supabase, then reload ---- */
+ /* ---- actions: save to the server, then reload ---- */
  const A = useMemo(() => {
    if (!data || !viewer) return {};
-   const raw = makeActions({ data, viewer, myHouseId, isAdmin, cur, nav: { tab } });
+   const raw = makeActions({ data, viewer, myHouseId, isAdmin, cur, nav: { tab: (n, p) => afterRef.current.push(() => tab(n, p)) } });
    const wrap = (fn) => (...args) => {
      const tx = { queue: [] };
      txRef.current = tx;
      Promise.resolve().then(() => { if (txRef.current === tx) txRef.current = null; });
+     if (savingRef.current) return; // a save is already running: ignore the extra tap
+     savingRef.current = true;
      setBusy((b) => b + 1);
      (async () => {
        try {
          await fn(...args);
          await refresh();
+         afterRef.current.splice(0).forEach((f) => f());
          tx.queue.forEach((f) => f());
        } catch (e) {
          console.error(e);
+         afterRef.current = [];
          showToast(errMsg(e), "error");
-       } finally { setBusy((b) => b - 1); }
+       } finally { savingRef.current = false; setBusy((b) => b - 1); }
      })();
    };
    return Object.fromEntries(Object.entries(raw).map(([k, f]) => [k, wrap(f)]));
@@ -1693,27 +1802,44 @@ function Main({ session }) {
    <Ctx.Provider value={ctx}>
      <div className="min-h-screen bg-slate-50 text-slate-800" style={{ fontSize: "17px" }}>
        {busy > 0 && <div className="fixed top-0 left-0 right-0 z-[70] h-1 bg-blue-600 animate-pulse" />}
-       {!online && <div className="bg-amber-500 text-slate-900 text-center text-base font-semibold py-2 px-4">You are offline. Changes cannot be saved right now.</div>}
-       <div className="max-w-xl mx-auto"><Screen key={route.key} {...(route.params || {})} /></div>
 
-       <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-slate-200" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-         <div className="max-w-xl mx-auto grid grid-cols-5 px-1 pt-2 pb-2">
-           {TABS.map((t) => {
-             const on = activeTab === t.id;
-             return (
-               <button key={t.id} onClick={() => tab(t.id)} aria-label={t.label} className="flex flex-col items-center gap-1 py-1">
-                 <span className={cx("h-8 w-16 rounded-full flex items-center justify-center", on ? "bg-blue-100 text-blue-700" : "text-slate-500")}><t.icon size={24} /></span>
-                 <span className={cx("text-xs font-semibold", on ? "text-blue-700" : "text-slate-500")}>{t.label}</span>
-               </button>
-             );
-           })}
+       {/* Top bar: brand, account, and the five main sections */}
+       <header className="sticky top-0 z-30 bg-white border-b border-slate-200" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+         <div className="mx-auto w-full max-w-xl md:max-w-3xl px-4">
+           <div className="flex items-center justify-between h-14">
+             <button onClick={() => tab("dashboard")} aria-label="Maintaino home" className="flex items-center gap-2 min-w-0">
+               <span className="h-9 w-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0"><Building2 size={20} /></span>
+               <span className="text-left min-w-0">
+                 <span className="block text-lg font-bold text-slate-800 leading-tight">Maintaino</span>
+                 <span className="block text-xs text-slate-500 truncate leading-tight">{data.settings.apartmentName}</span>
+               </span>
+             </button>
+             <button onClick={() => openSheet("account")} aria-label="Your account" className="flex items-center gap-2 h-11 pl-1 pr-1 sm:pr-3 rounded-full bg-slate-100">
+               <span className="h-9 w-9 rounded-full bg-blue-600 text-white text-sm font-bold flex items-center justify-center">{initials(viewer.name)}</span>
+               <span className="text-sm font-semibold text-slate-800 hidden sm:inline">{houseName(data, myHouseId)}</span>
+             </button>
+           </div>
+           <nav className="grid grid-cols-5 gap-1 pb-2" aria-label="Main sections">
+             {TABS.map((t) => {
+               const on = activeTab === t.id;
+               return (
+                 <button key={t.id} onClick={() => tab(t.id)} aria-current={on ? "page" : undefined} className={cx("flex flex-col items-center gap-0.5 py-1.5 rounded-xl", on ? "bg-blue-50 text-blue-700" : "text-slate-500")}>
+                   <t.icon size={22} />
+                   <span className="text-xs sm:text-sm font-semibold">{t.label}</span>
+                 </button>
+               );
+             })}
+           </nav>
          </div>
-       </nav>
+       </header>
+
+       {!online && <div className="bg-amber-500 text-slate-900 text-center text-base font-semibold py-2 px-4">You are offline. Changes cannot be saved right now.</div>}
+       <main className="mx-auto w-full max-w-xl md:max-w-3xl"><Screen key={route.key} {...(route.params || {})} /></main>
 
        {SheetC && <SheetC {...sheet.props} />}
        {toastMsg && (
-         <div className="fixed left-0 right-0 bottom-28 z-[60] flex justify-center px-4 pointer-events-none">
-           <div className="bg-slate-800 text-white text-base font-semibold px-5 py-3 rounded-2xl flex items-center gap-2 max-w-md">
+         <div className="fixed left-0 right-0 z-[60] flex justify-center px-4 pointer-events-none" style={{ top: "calc(env(safe-area-inset-top) + 8.5rem)" }}>
+           <div role="status" className="bg-slate-800 text-white text-base font-semibold px-5 py-3 rounded-2xl flex items-center gap-2 max-w-md">
              {toastMsg.kind === "error" ? <AlertTriangle size={20} className="text-amber-400 shrink-0" /> : <CheckCircle2 size={20} className="text-green-400 shrink-0" />}
              <span>{toastMsg.msg}</span>
            </div>

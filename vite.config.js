@@ -39,11 +39,11 @@ export default defineConfig({
 
       manifest: {
 
-        name: "Apartment Care",
+        name: "Maintaino",
 
-        short_name: "Apt Care",
+        short_name: "Maintaino",
 
-        description: "Maintenance, notices, complaints and accounts for your apartment.",
+        description: "Maintaino: maintenance, notices, complaints and accounts for your apartment.",
 
         theme_color: "#2563EB",
 

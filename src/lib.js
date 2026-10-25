@@ -1,8 +1,6 @@
-/* Apartment Care · data layer and helpers (no screens here).
+/* Maintaino · data layer and helpers (no screens here).
 
    Sections: SUPABASE · UTILS · CONFIG · DERIVED · FILES · DB · CONTEXT */
-
-import { createClient } from "@supabase/supabase-js";
 
 import { createContext, useContext } from "react";
 
@@ -15,6 +13,8 @@ import {
   Truck, Info,
 
 } from "lucide-react";
+
+import { createClient } from "@supabase/supabase-js";
 
 
  
@@ -142,9 +142,11 @@ export const errMsg = (e) => {
 
   const m = String((e && (e.message || e.error_description)) || e || "");
 
-  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return "No internet connection. Please try again.";
+  if (/Failed to fetch|NetworkError|Load failed|network request failed/i.test(m)) return "Cannot reach the server. Check your internet and try again.";
 
-  if (/row-level security|permission denied|not allowed|Only the (current )?Admin/i.test(m)) return /Only the/i.test(m) ? m : "You do not have permission to do that.";
+  if (/^Only the /i.test(m) || /^(Please|Choose|A term|The new term|This overlaps|Add between|Monthly maintenance|Apartment name|You cannot|You already|Complaint not found|Term not found|Only a planned)/i.test(m)) return m;
+
+  if (/row-level security|permission denied|not allowed/i.test(m)) return "You do not have permission to do that.";
 
   if (/duplicate key|already exists/i.test(m)) return "This already exists. Check the email, name or number and try again.";
 
@@ -156,9 +158,13 @@ export const errMsg = (e) => {
 
   if (/rate limit|too many/i.test(m)) return "Too many attempts. Please wait a few minutes and try again.";
 
-  if (/JWT|session/i.test(m)) return "Your session has ended. Please sign in again.";
+  if (/JWT|session|refresh token/i.test(m)) return "Your session has ended. Please sign in again.";
 
-  return m || "Something went wrong. Please try again.";
+  if (/file is larger|smaller file/i.test(m)) return m;
+
+  // Anything technical (database or provider wording) is logged for the developer, not shown to residents.
+
+  return "Something went wrong on the server. Please try again in a moment.";
 
 };
 
@@ -260,9 +266,27 @@ export const owed = (d, houseId, upto) => Object.keys(d.months).filter((m) => m 
 
 export const arrearsOf = (d, houseId, ym) => Object.keys(d.months).filter((m) => m < ym).reduce((s, m) => s + Math.max(0, dueOf(d, m) - paidBy(d, houseId, m)), 0);
 
-export const adminFor = (d, ym) => d.rotation.order[((monthsBetween(d.rotation.startMonth, ym) % d.rotation.order.length) + d.rotation.order.length) % d.rotation.order.length];
+// ----- Admin schedule: any house, any number of months (no fixed order) -----
 
-export const nextAdminOf = (d) => { const o = d.rotation.order; return o[(o.indexOf(d.adminHouseId) + 1) % o.length]; };
+export const ymIdx = (ym) => +ym.slice(0, 4) * 12 + (+ym.slice(5, 7) - 1);
+
+export const ymAdd = (ym, n) => { const i = ymIdx(ym) + n; return `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}`; };
+
+export const termsOf = (d) => (d.terms || []).filter((t) => t.state !== "Archived");
+
+export const termEnd = (t) => ymAdd(t.start, t.months - 1);
+
+export const adminTermFor = (d, ym) => termsOf(d)
+
+  .filter((t) => ymIdx(t.start) <= ymIdx(ym) && ymIdx(ym) <= ymIdx(termEnd(t)))
+
+  .sort((a, b) => ymIdx(b.start) - ymIdx(a.start))[0] || null;
+
+export const adminFor = (d, ym) => { const t = adminTermFor(d, ym); return t ? t.houseId : (ymIdx(ym) >= ymIdx(d.currentMonth) ? d.adminHouseId : null); };
+
+export const currentTerm = (d) => adminTermFor(d, d.currentMonth);
+
+export const nextTermOf = (d) => termsOf(d).filter((t) => ymIdx(t.start) > ymIdx(d.currentMonth)).sort((a, b) => ymIdx(a.start) - ymIdx(b.start))[0] || null;
 
 export const membersOf = (d, houseId) => d.members.filter((m) => m.houseId === houseId && m.state !== "Archived");
 
@@ -320,59 +344,127 @@ export function monthStats(d, ym) {
 
  
 
-export function buildReport(kind, d, ym) {
+// ----- One report for a month, a quarter or a year -----
 
-  const s = monthStats(d, ym);
+export const periodKeyOf = (type, ym) => (type === "month" ? ym : type === "quarter" ? `${ym.slice(0, 4)}-Q${Math.ceil(+ym.slice(5, 7) / 3)}` : ym.slice(0, 4));
 
-  const hn = (id) => houseName(d, id);
+export const periodRange = (type, key) => {
 
-  const base = [["Apartment", d.settings.apartmentName], ["Month", mLabel(ym)], ["Admin", hn(adminFor(d, ym))]];
+  if (type === "month") return [key, key];
 
-  if (kind === "maintenance") {
+  if (type === "quarter") { const s0 = `${key.slice(0, 4)}-${String((+key.slice(6) - 1) * 3 + 1).padStart(2, "0")}`; return [s0, ymAdd(s0, 2)]; }
 
-    return { title: "Maintenance Report", summary: [...base, ["Expected", inr(s.expected)], ["Collected", inr(s.collected)], ["Pending", inr(s.pending)]],
+  return [`${key}-01`, `${key}-12`];
 
-      columns: ["House", "Due (₹)", "Paid (₹)", "Pending (₹)", "Status"],
+};
 
-      rows: activeHouses(d).map((h) => { const due = dueOf(d, ym), paid = paidBy(d, h.id, ym); return [h.name, due, paid, Math.max(0, due - paid), paid >= due ? "Paid" : paid > 0 ? "Partial" : "Pending"]; }) };
+export const periodLabel = (type, key) => {
 
-  }
+  if (type === "month") return mLabel(key);
 
-  if (kind === "expense") {
+  if (type === "quarter") { const q = +key.slice(6) - 1; return `${MONTH_NAMES[q * 3].slice(0, 3)} – ${MONTH_NAMES[q * 3 + 2].slice(0, 3)} ${key.slice(0, 4)}`; }
 
-    return { title: "Expense Report", summary: [...base, ["Total expenses", inr(s.expenses)]],
+  return key;
 
-      columns: ["Date", "Category", "Description", "Vendor", "Amount (₹)", "Status"],
+};
 
-      rows: d.expenses.filter((e) => ymOf(e.date) === ym).map((e) => [fmtY(e.date), e.category, e.description, e.vendor || "—", e.amount, e.state === "Active" ? "Active" : e.state]) };
+export const periodOptions = (d, type) => {
 
-  }
+  const yms = [...Object.keys(d.months), d.currentMonth];
 
-  if (kind === "complaint") {
+  return [...new Set(yms.map((m) => periodKeyOf(type, m)))].sort().reverse();
 
-    return { title: "Complaint Report", summary: [...base, ["Complaints raised", String(d.complaints.filter((c) => ymOf(c.date) === ym).length)]],
+};
 
-      columns: ["Date", "House", "Category", "Title", "Status"],
 
-      rows: d.complaints.filter((c) => ymOf(c.date) === ym).map((c) => [fmtY(c.date), hn(c.houseId), c.category, c.title, c.status]) };
+ 
 
-  }
+export function buildReport(d, type, key) {
 
-  if (kind === "financial") {
+  const [start, end] = periodRange(type, key);
 
-    return { title: "Financial Report", summary: [...base, ["Opening balance", inr(s.opening)], ["Maintenance collected", inr(s.collected)], ["Total expenses", inr(s.expenses)], [ym === d.currentMonth ? "Current balance" : "Closing balance", inr(s.closing)], ["Houses reviewed", `${reviewsOf(d, ym).length} of ${activeHouses(d).length}`]],
+  const inRange = (ym) => ymIdx(ym) >= ymIdx(start) && ymIdx(ym) <= ymIdx(end);
 
-      columns: ["Category", "Amount (₹)", "Share"],
+  const have = Object.keys(d.months).filter(inRange).sort();
 
-      rows: Object.entries(s.byCat).sort((a, b) => b[1] - a[1]).map(([c, a]) => [c, a, `${Math.round((a / (s.expenses || 1)) * 100)}%`]) };
+  const hs = activeHouses(d);
 
-  }
+  const pays = d.payments.filter((p) => p.status === "Confirmed" && p.state !== "Archived" && inRange(p.month));
 
-  return { title: "Monthly Report", summary: [...base, ["Opening balance", inr(s.opening)], ["Collected", inr(s.collected)], ["Expenses", inr(s.expenses)], ["Closing balance", inr(s.closing)], ["Open complaints", String(d.complaints.filter((c) => ["Open", "In Progress"].includes(c.status)).length)]],
+  const exps = d.expenses.filter((e) => e.state !== "Archived" && inRange(ymOf(e.date))).sort((a, b) => a.date.localeCompare(b.date));
 
-    columns: ["Date", "Type", "Description", "Amount (₹)"],
+  const comps = d.complaints.filter((c) => c.state !== "Archived" && inRange(ymOf(c.date))).sort((a, b) => a.date.localeCompare(b.date));
 
-    rows: [...s.txns].reverse().map((t) => [fmtY(t.date), t.kind === "in" ? "Credit" : "Debit", t.title, (t.kind === "in" ? "+" : "-") + t.amount]) };
+  const collected = sum(pays, (p) => p.amount);
+
+  const spent = sum(exps, (e) => e.amount);
+
+  const opening = have.length ? d.months[have[0]].opening : 0;
+
+  const toDate = ymIdx(d.currentMonth) >= ymIdx(start) && ymIdx(d.currentMonth) <= ymIdx(end);
+
+  const admins = [...new Set(have.map((m) => adminFor(d, m)).filter(Boolean))].map((id) => houseName(d, id)).join(", ") || "—";
+
+  const byCat = {};
+
+  exps.forEach((e) => { byCat[e.category] = (byCat[e.category] || 0) + e.amount; });
+
+  const summary = [
+
+    ["Apartment", d.settings.apartmentName],
+
+    ["Period", periodLabel(type, key)],
+
+    ["Admin", admins],
+
+    ["Opening balance", inr(opening)],
+
+    ["Maintenance collected", inr(collected)],
+
+    ["Total expenses", inr(spent)],
+
+    [toDate ? "Balance to date" : "Closing balance", inr(opening + collected - spent)],
+
+  ];
+
+  if (type === "month") summary.push(["Houses reviewed", `${reviewsOf(d, key).length} of ${hs.length}`]);
+
+  summary.push(["Complaints raised", String(comps.length)]);
+
+  const sections = [
+
+    { title: "Maintenance by house", columns: ["House", "Due (₹)", "Paid (₹)", "Pending (₹)", "Status"],
+
+      rows: hs.map((h) => { const due = sum(have, (m) => d.months[m].due); const paid = sum(pays.filter((p) => p.houseId === h.id), (p) => p.amount); return [h.name, due, paid, Math.max(0, due - paid), paid >= due && due > 0 ? "Paid" : paid > 0 ? "Partial" : "Pending"]; }) },
+
+    { title: "Expenses by category", columns: ["Category", "Amount (₹)", "Share"],
+
+      rows: Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([c, a]) => [c, a, `${Math.round((a / (spent || 1)) * 100)}%`]) },
+
+    { title: "Expense details", columns: ["Date", "Category", "Description", "Vendor", "Amount (₹)"],
+
+      rows: exps.map((e) => [fmtY(e.date), e.category, e.description + (e.state === "Edited" ? " (edited)" : ""), e.vendor || "—", e.amount]) },
+
+    { title: "Complaints", columns: ["Date", "House", "Category", "Title", "Status"],
+
+      rows: comps.map((c) => [fmtY(c.date), houseName(d, c.houseId), c.category, c.title, c.status]) },
+
+  ];
+
+  return { title: "Maintaino report", label: periodLabel(type, key), summary, sections };
+
+}
+
+
+ 
+
+export function reportCSV(r) {
+
+  const lines = [[r.title], ...r.summary];
+
+  r.sections.forEach((sec) => { lines.push([]); lines.push([sec.title]); lines.push(sec.columns); sec.rows.forEach((row) => lines.push(row)); });
+
+  return "\ufeff" + lines.map((row) => row.map(csvEscape).join(",")).join("\r\n");
 
 }
 
@@ -534,7 +626,7 @@ async function fetchAll(table, orderCol = "created_at", ascending = true) {
 
  
 
-export const BACKUP_TABLES = ["houses", "members", "months", "payments", "expenses", "notices", "complaints", "work_requests", "votes", "vendors", "reviews", "transfers", "audit_log"];
+export const BACKUP_TABLES = ["houses", "admin_terms", "members", "months", "payments", "expenses", "notices", "complaints", "work_requests", "votes", "vendors", "reviews", "transfers", "audit_log"];
 
 
  
@@ -586,11 +678,9 @@ export async function loadAll(userId, claim = false) {
 
   const houses = T.houses
 
-    .map((r) => ({ id: r.id, name: r.name, number: r.number, state: r.state, sort: r.sort_order }))
+    .map((r) => ({ id: r.id, name: r.name, number: r.number, state: r.state }))
 
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-
-  const order = [...T.houses].filter((h) => h.state !== "Archived").sort((a, b) => a.sort_order - b.sort_order).map((h) => h.id);
 
 
  
@@ -624,7 +714,7 @@ export async function loadAll(userId, claim = false) {
 
     currentMonth: apt.current_month,
 
-    rotation: { startMonth: apt.rotation_start, order },
+    terms: T.admin_terms.map((r) => ({ id: r.id, houseId: r.house_id, start: r.start_ym, months: r.months, state: r.state })),
 
     houses,
 
@@ -673,7 +763,7 @@ export async function createApartment(f) {
 
     p_name: f.name, p_city: f.city, p_upi: f.upi, p_due: Number(f.due), p_opening: Number(f.opening || 0),
 
-    p_houses: f.houses, p_my_house: f.myHouse, p_my_name: f.myName, p_my_mobile: f.myMobile,
+    p_houses: f.houses, p_my_house: f.myHouse, p_my_months: Number(f.myMonths || 1), p_my_name: f.myName, p_my_mobile: f.myMobile,
 
   }));
 
@@ -692,7 +782,7 @@ export async function exportBackup() {
 
   const apartment = await ok(supabase.from("apartments").select("*").limit(1).maybeSingle());
 
-  return { app: "apartment-care", version: 2, exportedAt: new Date().toISOString(), apartment, tables };
+  return { app: "maintaino", version: 3, exportedAt: new Date().toISOString(), apartment, tables };
 
 }
 
@@ -943,9 +1033,7 @@ export function makeActions({ data, viewer, myHouseId, isAdmin, cur, nav }) {
 
     async addHouse(f) {
 
-      const next = Math.max(-1, ...data.houses.map((h) => h.sort)) + 1;
-
-      await ok(supabase.from("houses").insert({ name: f.name.trim(), number: f.number.trim(), sort_order: next }));
+      await ok(supabase.from("houses").insert({ name: f.name.trim(), number: f.number.trim() }));
 
       await log("house", `House added: ${f.name.trim()} (${f.number.trim()})`);
 
@@ -980,11 +1068,23 @@ export function makeActions({ data, viewer, myHouseId, isAdmin, cur, nav }) {
 
  
 
-    /* admin rotation (the database closes the month and writes its own audit lines) */
+    /* admin schedule and month closing (the database does the maths and writes its own audit lines) */
 
-    async transferAdmin(to, notes) {
+    async addTerm(f) {
 
-      await ok(supabase.rpc("transfer_admin", { p_to: to, p_notes: notes }));
+      await ok(supabase.rpc("add_admin_term", { p_house: f.houseId, p_start: f.start, p_months: Number(f.months) }));
+
+    },
+
+    async archiveTerm(id) {
+
+      await ok(supabase.rpc("archive_admin_term", { p_id: id }));
+
+    },
+
+    async closeMonth(notes, handover) {
+
+      await ok(supabase.rpc("close_month", { p_notes: notes, p_next_house: handover ? handover.houseId : null, p_next_months: handover ? Number(handover.months) : null }));
 
       nav.tab("dashboard");
 

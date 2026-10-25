@@ -1,6 +1,6 @@
 {
 
-  "name": "apartment-care",
+  "name": "maintaino",
 
   "private": true,
 
@@ -44,13 +44,9 @@
 
     "vite-plugin-pwa": "^0.21.1"
 
-  },
-
-  "allowScripts": {
-
-    "esbuild@0.21.5": true
-
   }
 
 }
 
+
+ 
